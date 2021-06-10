@@ -1,0 +1,6 @@
+Instrucciones para ejecutar el Notebook:
+
+1. Ingresar al Notebook donde está desarrollado el modelo: https://colab.research.google.com/drive/16LPLy-SL_QLvh05E4eeJ9YqBg1Kn1ckn?authuser=1#scrollTo=2vzMTKjpfr_Y
+2. Descargar la base de datos directamente de Kaggle: https://www.kaggle.com/c/santander-customer-satisfaction
+3. Cargar la base en Google Collab y convertirlo a DataFrame con el nombre "DF"
+4. Ejecutar el resto de celdas (puede ser de forma consecutiva o ejecutar todo el Notebook)
