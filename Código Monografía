@@ -1,1 +1,400 @@
+from google.colab import drive
+drive.mount('/content/drive')
 
+import pandas as pd
+import numpy as np
+
+df = pd.read_csv('/content/drive/MyDrive/Trabajo grado/train_bd.csv', sep=',')
+
+i=0
+for col in df.columns:
+    if df[col].var()==0:
+        i+=1
+        del df[col]
+        
+ohe_var3 = pd.get_dummies(df['var3'], prefix = 'region_')
+
+df = pd.concat([df, ohe_var3], axis=1)
+
+labels=list(df.columns.values)
+
+a=0;
+lista = ['imp', 'saldo']
+
+for i in lista:
+  for label in labels:
+    if (label.find(i) !=-1):
+      df[label] = np.log(df[label]+1)
+      
+df.isnull().sum().sum()
+
+df.replace([np.inf, -np.inf], 0, inplace = True)
+
+df.replace(np.nan, 0, inplace = True)
+
+df['var3'] = df['var3'].replace([-999999.000000, -1])
+
+df_data = df.drop(['TARGET'], axis=1)
+
+from sklearn.ensemble import IsolationForest
+clf = IsolationForest(n_estimators=20, warm_start=True)
+clf.fit(df_data)
+anomalo = clf.predict(df_data)
+
+y_pred = pd.DataFrame(anomalo)
+y_pred.value_counts()
+
+df['anomalia'] = y_pred
+
+df = df[df['anomalia']==1]
+
+df.drop(['anomalia'], axis=1, inplace= True)
+
+def correlacion_variable(train=df, target_threshold = 10**-2,within_threshold=0.8):
+  #Esta parte calcula la correlación explicativas con la objetivo y elimina las que tengan
+  #un valor menor al target_threshold 
+  initial_feature = train.shape[1]
+  corr = train.drop("ID",axis=1).corr().abs()
+  corr_target = pd.DataFrame(corr['TARGET']).sort_values(by='TARGET')
+  threshold=target_threshold
+  feat_df =corr_target[(corr_target['TARGET'])<=threshold]
+  print("Hay %i caracteristicas que tienen una correlación menor a %.3f respecto al 'TARGET' por tanto las eliminaremos."\
+        %(feat_df.shape[0],threshold))
+  print("Eliminando.........")
+  for df in [train]:
+    df.drop(feat_df.index,axis=1,inplace=True)
+
+  #Esta parte calcula la correlación entre las variables explicativas y elimina las que tengan
+  #un correlación mayor al within_threshold 
+  corr.drop('TARGET',axis=1,inplace=True)
+  corr.drop('TARGET',axis=0,inplace=True)
+  corr.drop(feat_df.index,axis=1,inplace=True)
+  corr.drop(feat_df.index,inplace=True)
+  threshold = within_threshold
+  upper = corr.where(np.triu(np.ones(corr.shape),k=1).astype(np.bool)) 
+  column = [col for col in upper.columns if any(upper[col]>threshold)]
+  print("Hay %i caracteristicas que tienen alta correlación con otra variable por encima de %.3f . Por lo tanto se eliminan."\
+        %(len(column),threshold))
+  print("Eliminando.........")
+  for df in [train]:
+    df.drop(column,axis=1,inplace=True)
+  print("Las variables pasaron de %i a %i. %i de variables fueron eliminadas."%(initial_feature,train.shape[1],initial_feature-train.shape[1]))
+
+
+correlacion_variable(train=df)
+
+# Creamos la matriz de correlación para identificar las caracteristicas más relevantes
+
+from matplotlib import pyplot as plt
+
+matriz_corr = df.corr().abs()
+top30_correlacion = matriz_corr.nlargest(30, 'TARGET')['TARGET']
+
+# Graficamos el top 30 de las caracteristicas más relevantes
+fig, ax = plt.subplots(1, 1, sharex=False, sharey=False, figsize=(7,4))
+plt.bar(top30_correlacion[1:].index.values, top30_correlacion[1:].values, alpha=0.7)
+plt.title("Top 30 de las variables más correlacionadas con la variable a predecir")
+plt.ylabel("Correlación")
+plt.xlabel("Caracteristicas")
+plt.xticks(rotation=90)
+plt.show()
+
+df_cluster = df.drop(['TARGET'], axis=1)
+
+# Estandarizamos los datos
+from sklearn.preprocessing import StandardScaler
+SC= StandardScaler()
+
+df_cluster = SC.fit_transform(df_cluster)
+df_cluster
+
+from sklearn.cluster import KMeans
+
+wcss = []
+
+for i in range(1, 11):
+  kmeans = KMeans(n_clusters = i, max_iter = 300)
+  kmeans.fit(df_cluster)
+  wcss.append(kmeans.inertia_)
+  
+plt.plot(range(1,11), wcss)
+plt.title("Codo de Jambú")
+plt.xlabel("Número de clusters")
+plt.ylabel("WCSS")
+plt.show()
+
+from sklearn.cluster import KMeans
+clustering = KMeans(n_clusters = 5, max_iter = 300)
+clustering.fit(df_cluster)
+
+df['KMeans_Clusters'] = clustering.labels_
+
+
+C = np.corrcoef(df['KMeans_Clusters'],df['TARGET'])
+
+labels=list(df.columns.values)
+
+a=0;
+lista = ['imp', 'saldo']
+df_PCA = pd.DataFrame()
+
+for i in lista:
+  for label in labels:
+    if (label.find(i) !=-1):
+      df_PCA = pd.concat([df_PCA, df[label]], axis=1)
+
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=3)
+df_pca_trans = pca.fit_transform(df_PCA)
+
+pca.explained_variance_
+
+df_pca_final = pd.DataFrame(df_pca_trans, columns= ['pca_1', 'pca_2','pca_3'])
+
+a=0;
+lista = ['imp', 'saldo']
+df_PCA_v3 = df.copy()
+
+
+for i in lista:
+  for label in labels:
+    if (label.find(i) !=-1):
+      df_PCA_v3.drop([label], axis=1, inplace= True)
+      
+      
+df_PCA_v4 = pd.concat([df_PCA_v3, df_pca_final], axis=1)
+
+df_PCA_v4.dropna(inplace = True)
+
+from imblearn.over_sampling import RandomOverSampler
+ros = RandomOverSampler(random_state=0)
+X_resampled_over, y_resampled_over = ros.fit_resample(df_PCA_v4.drop(['TARGET', 'ID'], axis=1), df_PCA_v4['TARGET'])
+from collections import Counter
+print(sorted(Counter(y_resampled_over).items()))
+
+from imblearn.under_sampling import NearMiss
+nm1 = NearMiss(version=1)
+X_resampled_under, y_resampled_under = nm1.fit_resample(df_PCA_v4.drop(['TARGET', 'ID'], axis=1), df_PCA_v4['TARGET'])
+print(sorted(Counter(y_resampled_under).items()))
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X_resampled_over, y_resampled_over, stratify= y_resampled_over)
+
+from sklearn.preprocessing import StandardScaler
+SC= StandardScaler()
+
+X_train_sc = SC.fit_transform(X_train)
+X_test_sc = SC.fit_transform(X_test)
+
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import roc_auc_score
+
+param_grid = {
+        'penalty' : ['l2', 'none'],
+        'multi_class' : ['auto', 'ovr', 'multinomial']
+}
+
+grid_search = GridSearchCV(
+    estimator = LogisticRegression(), 
+    param_grid = param_grid,
+    cv = 5
+)
+
+grid_search.fit(X_train_sc, y_train)
+
+grid_search.best_params_
+
+LR = LogisticRegression(multi_class= 'auto', penalty= 'none')
+LR.fit(X_train_sc,y_train)
+
+AUC_RL_Train = roc_auc_score(y_train,LR.predict(X_train_sc) )
+AUC_RL_Train
+
+y_pred = LR.predict(X_test_sc)
+
+AUC_RL = roc_auc_score(y_test, y_pred)
+AUC_RL
+
+param_grid = {
+        'kernel' : ['linear', 'poly', 'rbf'],
+        'gamma' : ['auto']
+}
+
+grid_search = GridSearchCV(
+    estimator = SVC(), 
+    param_grid = param_grid,
+    cv = 5
+)
+
+grid_search.fit(X_train_sc, y_train)
+
+grid_search.best_params_
+
+from sklearn.svm import SVC
+MSV=SVC(gamma= 'scale', kernel= 'rbf', max_iter=-1)
+MSV.fit(X_train_sc,y_train)
+
+
+from sklearn.metrics import confusion_matrix
+
+y_pred = MSV.predict(X_test_sc)
+confusion_matrix(y_test, y_pred)
+
+AUC_MSV_Train = roc_auc_score(y_train,MSV.predict(X_train_sc))
+AUC_MSV_Train
+
+AUC_MSV = roc_auc_score(y_test, y_pred)
+AUC_MSV
+
+param_grid = {
+        'n_estimators' : [30,40,50],
+        'criterion': ['gini', 'entropy'],
+        'max_depth' : [2,3,4]
+}
+
+grid_search = GridSearchCV(
+    estimator = RandomForestClassifier(), 
+    param_grid = param_grid,
+    cv = 5
+)
+
+grid_search.fit(X_train_sc, y_train)
+
+grid_search.best_params_
+
+RF = RandomForestClassifier(n_estimators=30, criterion='entropy', max_depth=3)
+RF.fit(X_train_sc,y_train)
+
+from sklearn.metrics import confusion_matrix
+
+y_pred = RF.predict(X_test_sc)
+confusion_matrix(y_test, y_pred)
+
+from sklearn.metrics import roc_auc_score
+AUC_RL_train = roc_auc_score(y_train, RF.predict(X_train_sc))
+AUC_RL_train
+AUC_RL = roc_auc_score(y_test, y_pred)
+AUC_RL
+
+param_grid = {
+        'n_estimators' : [30,40,50,60],
+        'loss': ['deviance', 'exponential'],
+        'criterion' : ['friedman_mse', 'mse', 'mae']
+}
+
+grid_search = GridSearchCV(
+    estimator = GradientBoostingClassifier(), 
+    param_grid = param_grid,
+    cv = 5
+)
+
+grid_search.fit(X_train_sc, y_train)
+
+grid_search.best_params_
+
+GB = GradientBoostingClassifier(criterion= 'friedman_mse', loss= 'exponential', n_estimators= 50)
+GB = GB.fit(X_train_sc, y_train)
+
+
+from sklearn.metrics import confusion_matrix
+
+y_pred = GB.predict(X_test_sc)
+confusion_matrix(y_test, y_pred)
+
+AUC_RF_train = roc_auc_score(y_train, GB.predict(X_train_sc))
+AUC_RF_train
+AUC_RF = roc_auc_score(y_test, y_pred)
+AUC_RF
+
+AUC_RF_train
+
+import keras
+from keras.models import Sequential
+from keras.layers import Dense, Dropout
+from keras.utils import to_categorical
+import tensorflow as tf
+keras.backend.clear_session()
+
+modelA= keras.models.Sequential()
+modelA.add(keras.layers.Dense(25, input_dim=X_train_sc.shape[1], activation='relu', kernel_initializer='he_uniform'))
+modelA.add(keras.layers.Dropout(0.4))
+modelA.add(keras.layers.Dense(10, input_dim=X_train_sc.shape[1], activation='relu', kernel_initializer='he_uniform'))
+modelA.add(keras.layers.Dense(1, activation='sigmoid'))
+
+
+opt = keras.optimizers.SGD(lr=0.01, momentum=0.9)
+modelA.compile(loss = 'binary_crossentropy', optimizer = opt, metrics=[tf.keras.metrics.AUC(curve='ROC')])
+
+
+# Ajuste del modelo:
+history = modelA.fit(X_train_sc, y_train, validation_data=(SC.fit_transform(X_test), y_test), epochs=15)
+
+_, train_acc = modelA.evaluate(X_train_sc, y_train, verbose=0)
+_, test_acc = modelA.evaluate(SC.fit_transform(X_test), y_test, verbose=0)
+print('Train: %.3f, Test: %.3f' % (train_acc, test_acc))
+
+
+plt.plot(history.history['auc'], label='train')
+plt.plot(history.history['val_auc'], label='test')
+plt.legend()
+plt.show()
+
+from sklearn.metrics import confusion_matrix
+predicciones=modelA.predict_classes(SC.fit_transform(X_test))
+Cm = confusion_matrix(y_test,predicciones)
+Cm
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(df.drop(['TARGET', 'ID'], axis=1), df['TARGET'], stratify= df['TARGET'])
+
+from sklearn.preprocessing import StandardScaler
+SC= StandardScaler()
+
+X_train_sc = SC.fit_transform(X_train)
+X_test_sc = SC.fit_transform(X_test)
+
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import make_scorer
+from sklearn.model_selection import StratifiedKFold
+
+model = Pipeline([
+                  ("iforest", IsolationForest())
+])
+
+gs = GridSearchCV(
+    model, 
+    param_grid={
+        'iforest__n_estimators':[10,20,30,50]
+        }, 
+        n_jobs=2, 
+        scoring= make_scorer(roc_auc_score),
+        cv= StratifiedKFold(n_splits=5)
+)
+
+gs.fit(X_train_sc, y_train)
+
+gs.best_params_
+
+modelo1 = gs.best_estimator_
+
+modelo1.fit(X_train)
+
+y_test_pred = modelo1.predict(X_test)
+
+pd.DataFrame(y_test_pred).value_counts()
+
+pd.DataFrame(y_test_pred).replace(1,0, inplace=True)
+pd.DataFrame(y_test_pred).replace(-1,1, inplace=True)
+
+from sklearn.metrics import confusion_matrix
+
+confusion_matrix(y_test, y_test_pred)
+
+AUC_RL = roc_auc_score(y_test, y_test_pred)
+AUC_RL
